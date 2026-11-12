@@ -12,7 +12,16 @@ FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-3.6-flash"]  # used only on 503
 
 
 # ----------------------------- Gemini helpers -----------------------------
-def call_gemini_safe(client, prompt: str, system_instruction: str = None,
+@st.cache_resource
+def get_client(api_key: str):
+    return genai.Client(api_key=api_key)
+
+
+def is_503(err: Exception) -> bool:
+    code = getattr(err, "code", None)
+    text = str(err)
+    return code == 503 or "503" in text or "UNAVAILABLE" in text
+  def call_gemini_safe(client, prompt: str, system_instruction: str = None,
                      max_retries: int = 2) -> str:
     """Try the main model with quick retries; on repeated 503, fall back to other models."""
     config = (types.GenerateContentConfig(system_instruction=system_instruction)
