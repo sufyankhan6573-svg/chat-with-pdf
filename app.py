@@ -8,7 +8,7 @@ from pypdf import PdfReader
 
 # ----------------------------- Configuration -----------------------------
 MODEL_NAME = "gemini-3.8-flash"
-FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-3.6-flash"]  # used only on 503
+FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]  # used on 503 / 429
 MAX_CONTEXT_CHARS = 15000  # requested limit; raise (e.g. 400000) for long decks
 HISTORY_TURNS = 6          # recent chat messages sent back to the model
 
@@ -27,12 +27,19 @@ def is_503(err: Exception) -> bool:
     return code == 503 or "503" in text or "UNAVAILABLE" in text
 
 
+def is_quota(err: Exception) -> bool:
+    code = getattr(err, "code", None)
+    text = str(err)
+    return code == 429 or "429" in text or "RESOURCE_EXHAUSTED" in text
+
+
 def call_gemini_safe(client, prompt: str, system_instruction: str = None,
                      max_retries: int = 2) -> str:
     """Try the main model with quick retries; on repeated 503, fall back to other models."""
     config = (types.GenerateContentConfig(system_instruction=system_instruction)
               if system_instruction else None)
     last_err = None
+    quota_hit = False
     for model in [MODEL_NAME] + FALLBACK_MODELS:
         for attempt in range(max_retries + 1):
             try:
@@ -40,16 +47,22 @@ def call_gemini_safe(client, prompt: str, system_instruction: str = None,
                     model=model, contents=prompt, config=config
                 )
                 if model != MODEL_NAME:
-                    st.toast(f"Main model busy, answered with {model}", icon="ℹ️")
+                    st.toast(f"Main model unavailable, answered with {model}", icon="ℹ️")
                 return response.text or "The model returned an empty response."
             except Exception as e:  # noqa: BLE001
                 last_err = e
+                if is_quota(e):
+                    quota_hit = True
+                    break  # daily quota is per model: retrying is useless, try next model
                 if is_503(e):
                     if attempt < max_retries:
                         time.sleep(1)
                         continue
                     break  # give up on this model, try the next one
                 return f"⚠️ Error while calling Gemini: {e}"
+    if quota_hit and not is_503(last_err):
+        return ("⚠️ Free-tier daily quota is used up on all available models. "
+                "Wait for the quota to reset, or enable billing in Google AI Studio.")
     return ("⚠️ All Gemini models are under high demand right now (503). "
             "Please try again in a minute.")
 
