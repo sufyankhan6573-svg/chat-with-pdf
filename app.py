@@ -8,47 +8,35 @@ from pypdf import PdfReader
 
 # ----------------------------- Configuration -----------------------------
 MODEL_NAME = "gemini-3.8-flash"
-MAX_CONTEXT_CHARS = 15000  # requested limit; raise (e.g. 400000) for long decks
-HISTORY_TURNS = 6          # recent chat messages sent back to the model
-
-st.set_page_config(page_title="Chat & Study Hub", page_icon="📚", layout="wide")
+FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-3.6-flash"]  # used only on 503
 
 
 # ----------------------------- Gemini helpers -----------------------------
-@st.cache_resource
-def get_client(api_key: str):
-    return genai.Client(api_key=api_key)
-
-
-def is_503(err: Exception) -> bool:
-    code = getattr(err, "code", None)
-    text = str(err)
-    return code == 503 or "503" in text or "UNAVAILABLE" in text
-
-
 def call_gemini_safe(client, prompt: str, system_instruction: str = None,
                      max_retries: int = 2) -> str:
-    """Call Gemini; on 503 UNAVAILABLE retry quickly (1s delay)."""
+    """Try the main model with quick retries; on repeated 503, fall back to other models."""
     config = (types.GenerateContentConfig(system_instruction=system_instruction)
               if system_instruction else None)
     last_err = None
-    for attempt in range(max_retries + 1):
-        try:
-            response = client.models.generate_content(
-                model=MODEL_NAME, contents=prompt, config=config
-            )
-            return response.text or "The model returned an empty response."
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-            if is_503(e) and attempt < max_retries:
-                time.sleep(1)
-                continue
-            break
-    if last_err is not None and is_503(last_err):
-        return ("⚠️ The model is under high demand right now (503). "
-                "Please try again in a few seconds.")
-    return f"⚠️ Error while calling Gemini: {last_err}"
-
+    for model in [MODEL_NAME] + FALLBACK_MODELS:
+        for attempt in range(max_retries + 1):
+            try:
+                response = client.models.generate_content(
+                    model=model, contents=prompt, config=config
+                )
+                if model != MODEL_NAME:
+                    st.toast(f"Main model busy, answered with {model}", icon="ℹ️")
+                return response.text or "The model returned an empty response."
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                if is_503(e):
+                    if attempt < max_retries:
+                        time.sleep(1)
+                        continue
+                    break  # give up on this model, try the next one
+                return f"⚠️ Error while calling Gemini: {e}"
+    return ("⚠️ All Gemini models are under high demand right now (503). "
+            "Please try again in a minute.")
 
 # ----------------------------- PDF helpers -----------------------------
 @st.cache_data(show_spinner=False)
