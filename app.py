@@ -9,6 +9,10 @@ from pypdf import PdfReader
 # ----------------------------- Configuration -----------------------------
 MODEL_NAME = "gemini-3.8-flash"
 FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-3.6-flash"]  # used only on 503
+MAX_CONTEXT_CHARS = 15000  # requested limit; raise (e.g. 400000) for long decks
+HISTORY_TURNS = 6          # recent chat messages sent back to the model
+
+st.set_page_config(page_title="Chat & Study Hub", page_icon="📚", layout="wide")
 
 
 # ----------------------------- Gemini helpers -----------------------------
@@ -21,7 +25,9 @@ def is_503(err: Exception) -> bool:
     code = getattr(err, "code", None)
     text = str(err)
     return code == 503 or "503" in text or "UNAVAILABLE" in text
-  def call_gemini_safe(client, prompt: str, system_instruction: str = None,
+
+
+def call_gemini_safe(client, prompt: str, system_instruction: str = None,
                      max_retries: int = 2) -> str:
     """Try the main model with quick retries; on repeated 503, fall back to other models."""
     config = (types.GenerateContentConfig(system_instruction=system_instruction)
@@ -46,6 +52,7 @@ def is_503(err: Exception) -> bool:
                 return f"⚠️ Error while calling Gemini: {e}"
     return ("⚠️ All Gemini models are under high demand right now (503). "
             "Please try again in a minute.")
+
 
 # ----------------------------- PDF helpers -----------------------------
 @st.cache_data(show_spinner=False)
@@ -78,7 +85,6 @@ st.session_state.setdefault("quiz", "")
 st.session_state.setdefault("summary", "")
 
 # ----------------------------- API key -----------------------------
-api_key = st.secrets.get("GEMINI_API_KEY", None) if hasattr(st, "secrets") else None
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:  # noqa: BLE001
